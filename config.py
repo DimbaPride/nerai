@@ -1,10 +1,10 @@
-#config.py
 import os
 import logging
 from typing import Dict, List, Any
 from dataclasses import dataclass
 from enum import Enum
 from dotenv import load_dotenv
+from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,12 @@ class WhatsAppConfig:
     retry_delay: int = 1
     timeout: int = 30
 
+@dataclass
+class SupabaseConfig:
+    """Configuração do Supabase."""
+    url: str
+    key: str
+
 class ConfigurationManager:
     """Gerenciador de configurações da aplicação."""
 
@@ -49,6 +55,8 @@ class ConfigurationManager:
         "EVOLUTION_API_URL": "URL da API Evolution",
         "GROQ_API_KEY": "Chave da API Groq",
         "ANTHROPIC_API_KEY": "Chave da API Claude",
+        "SUPABASE_URL": "URL do Supabase",
+        "SUPABASE_KEY": "Chave da API do Supabase",
     }
 
     # Configurações dos modelos
@@ -74,6 +82,7 @@ class ConfigurationManager:
         self._load_environment()
         self.api_config = self._load_api_config()
         self.whatsapp_config = self._load_whatsapp_config()
+        self.supabase_config = self._load_supabase_config()
 
     def _load_environment(self) -> None:
         """
@@ -124,22 +133,17 @@ class ConfigurationManager:
             timeout=int(os.getenv("TIMEOUT", "30"))
         )
 
-    def get_model_config(self, provider: ModelProvider) -> ModelConfig:
+    def _load_supabase_config(self) -> SupabaseConfig:
         """
-        Retorna configuração do modelo especificado.
+        Carrega configurações do Supabase.
         
-        Args:
-            provider: Provedor do modelo
-            
         Returns:
-            ModelConfig: Configuração do modelo
-            
-        Raises:
-            ValueError: Se provedor não existir
+            SupabaseConfig: Configurações do Supabase
         """
-        if provider not in self.MODELS:
-            raise ValueError(f"Provedor não suportado: {provider}")
-        return self.MODELS[provider]
+        return SupabaseConfig(
+            url=os.getenv("SUPABASE_URL", ""),
+            key=os.getenv("SUPABASE_KEY", "")
+        )
 
     @property
     def environment(self) -> Dict[str, Any]:
@@ -163,3 +167,7 @@ ANTHROPIC_MODEL = config_manager.get_model_config(ModelProvider.CLAUDE).name
 
 # Exporta configurações de API
 API_CONFIG = config_manager.api_config
+
+# Exporta configurações do Supabase
+SUPABASE_CONFIG = config_manager.supabase_config
+SUPABASE_CLIENT = create_client(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key)
