@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from agents.agent_setup import agent_executor
 
 from utils.smart_message_processor import send_message_in_chunks
+from utils.conversation_manager import conversation_manager
 
 logger = logging.getLogger(__name__)
 
@@ -45,30 +46,32 @@ class MessageBuffer:
         if number in self._message_buffer:
             self._message_buffer.pop(number)
 
-    def add_to_history(self, number: str, role: str, content: str) -> None:
-        """Adiciona mensagem ao histórico."""
-        if number not in self._conversation_history:
-            self._conversation_history[number] = []
-        self._conversation_history[number].append(
-            ConversationMessage(role=role, content=content)
-        )
-
     async def _process_message(self, message: str, number: str) -> bool:
         """Processa uma mensagem individual."""
         try:
-            # Adiciona mensagem ao histórico
-            self.add_to_history(number, "user", message)
+            # Adiciona mensagem ao histórico usando o conversation_manager
+            conversation_manager.add_message(number, message, role='user')
             
-            # Invoca o agente
-            result = agent_executor.invoke({
+            # Obtém histórico completo para o agente
+            history = conversation_manager.get_history(number)
+            logger.debug(f"Histórico para {number}: {history}")
+            
+            # Invoca o agente com o histórico
+            result = await agent_executor.ainvoke({
                 "input": message,
-                "history": self._conversation_history.get(number, [])
+                "history": history
             })
             
             # Processa resposta
             response = result.get("output", self.config.error_message)
-            self.add_to_history(number, "assistant", response)
             
+            # Adiciona resposta ao histórico
+            conversation_manager.add_message(number, response, role='assistant')
+            
+            # Log da resposta para debug
+            logger.debug(f"Resposta gerada para {number}: {response}")
+            
+            # Envia a resposta
             return await send_message_in_chunks(response, number)
             
         except Exception as e:

@@ -1,55 +1,54 @@
-#config.py
-import os                  # Operações do sistema
-import logging            # Sistema de logs
-from typing import Dict, List, Any  # Tipos para type hints
-from dataclasses import dataclass   # Para classes de dados
-from enum import Enum              # Para enumerações
-from dotenv import load_dotenv     # Carregar variáveis de ambiente
-from supabase import create_client, Client  # Cliente Supabase
+import os
+import logging
+from typing import Dict, List, Any
+from dataclasses import dataclass
+from enum import Enum
+from dotenv import load_dotenv
+from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
 
 class ModelProvider(Enum):
-    """Define os provedores de IA disponíveis"""
+    """Provedores de modelos de IA."""
     OPENAI = "openai"
     GROQ = "groq"
-    CLAUDE = "claude"
+    CLAUDE = "claude"  # Adicionado Claude
 
 @dataclass
 class ModelConfig:
-    """Configuração para modelos de IA"""
-    name: str             # Nome do modelo
-    provider: ModelProvider  # Provedor
-    temperature: float = 0.3  # Temperatura (criatividade)
-    max_tokens: int = 400    # Máximo de tokens
+    """Configuração dos modelos de IA."""
+    name: str
+    provider: ModelProvider
+    temperature: float = 0.3
+    max_tokens: int = 400
 
 @dataclass
 class APIConfig:
-    """Configurações das APIs"""
+    """Configuração das APIs."""
     openai_key: str
     evolution_key: str
     evolution_url: str
     groq_key: str
-    anthropic_key: str
+    anthropic_key: str  # Adicionado chave do Anthropic
 
 @dataclass
 class WhatsAppConfig:
-    """Configurações do WhatsApp"""
+    """Configuração do WhatsApp."""
     instance_name: str = "nerai"
-    max_retries: int = 3     # Máximo de tentativas
-    retry_delay: int = 1     # Delay entre tentativas
-    timeout: int = 30        # Timeout das requisições
+    max_retries: int = 3
+    retry_delay: int = 1
+    timeout: int = 30
 
 @dataclass
 class SupabaseConfig:
-    """Configurações do Supabase"""
+    """Configuração do Supabase."""
     url: str
     key: str
 
 class ConfigurationManager:
-    """Classe principal que gerencia todas as configurações"""
+    """Gerenciador de configurações da aplicação."""
 
-     #Define variáveis de ambiente necessárias
+    # Variáveis de ambiente requeridas
     REQUIRED_ENV = {
         "OPENAI_API_KEY": "Chave da API OpenAI",
         "EVOLUTION_API_KEY": "Chave da API Evolution",
@@ -60,7 +59,7 @@ class ConfigurationManager:
         "SUPABASE_KEY": "Chave da API do Supabase",
     }
 
-    # Define configurações dos modelos
+    # Configurações dos modelos
     MODELS = {
         ModelProvider.OPENAI: ModelConfig(
             name="gpt-4-turbo-preview",
@@ -153,16 +152,26 @@ class ConfigurationManager:
             key: os.getenv(key)
             for key in self.REQUIRED_ENV
         }
+  
+    def get_model_config(self, provider: ModelProvider) -> ModelConfig:
+        """
+        Retorna a configuração do modelo para um provedor específico.
+
+        Parâmetros:
+            provider (ModelProvider): Provedor do modelo (e.g., ModelProvider.OPENAI).
+
+        Retorna:
+            ModelConfig: Configuração associada ao provedor.
+        """
+        return self.MODELS.get(provider)
 
 # Cria instância global do gerenciador
 config_manager = ConfigurationManager()
 
-# Exporta configurações para uso em outros módulos
+# Exporta configurações para compatibilidade
 INSTANCE_NAME = config_manager.whatsapp_config.instance_name
 MAX_RETRIES = config_manager.whatsapp_config.max_retries
 RETRY_DELAY = config_manager.whatsapp_config.retry_delay
-
-# Exporta configurações dos modelos
 OPENAI_MODEL = config_manager.get_model_config(ModelProvider.OPENAI).name
 GROQ_MODEL = config_manager.get_model_config(ModelProvider.GROQ).name
 ANTHROPIC_MODEL = config_manager.get_model_config(ModelProvider.CLAUDE).name
@@ -170,6 +179,6 @@ ANTHROPIC_MODEL = config_manager.get_model_config(ModelProvider.CLAUDE).name
 # Exporta configurações de API
 API_CONFIG = config_manager.api_config
 
-# Exporta configurações de API e Supabase
+# Exporta configurações do Supabase
 SUPABASE_CONFIG = config_manager.supabase_config
 SUPABASE_CLIENT = create_client(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key)
