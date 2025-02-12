@@ -11,7 +11,7 @@ from quart import Quart, request, jsonify
 
 from agents.agent_setup import agent_manager  # Modificado para usar agent_manager
 from services.audio_processing import handle_audio_message
-from utils.message_buffer import handle_message_with_buffer
+from utils.message_buffer import handle_message_with_buffer, update_presence  # Adicionada importação
 from utils.smart_message_processor import send_message_in_chunks
 from utils.conversation_manager import conversation_manager
 
@@ -47,11 +47,24 @@ async def webhook():
         event_type = data.get("event")
         message_data = data.get("data", {})
 
+        # Processa eventos de presença primeiro
+        if event_type == "presence.update":
+            try:
+                presence_data = message_data.get("presences", {})
+                for number, status in presence_data.items():
+                    number = number.split("@")[0]
+                    logger.debug(f"Atualizando presença para {number}: {status}")
+                    update_presence(number, status)
+                return jsonify({"status": "success"}), 200
+            except Exception as e:
+                logger.error(f"Erro ao processar presence.update: {e}")
+                return jsonify({"status": "error", "message": str(e)}), 500
+
         if isinstance(message_data, list) and message_data:
             message_data = message_data[0]
 
         # Verifica se a mensagem foi enviada pelo próprio agente
-        agent_number = conversation_manager.normalize_phone('5511911043825')  # Normaliza número do agente
+        agent_number = conversation_manager.normalize_phone('5511911043825')
         if message_data.get('sender') == f"{agent_number}@s.whatsapp.net":
             logger.info("Mensagem enviada pelo agente, ignorando...")
             return jsonify({"status": "success", "message": "Mensagem do agente ignorada"}), 200
