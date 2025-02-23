@@ -1,8 +1,9 @@
-from functools import partial
+from functools import partial, wraps
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 import pytz
 import logging
+import asyncio
 from langchain.agents import Tool, AgentExecutor, create_openai_functions_agent
 from langchain.prompts import PromptTemplate
 from langchain_core.tools import BaseTool
@@ -14,22 +15,109 @@ from config import CALENDAR_CONFIG
 
 logger = logging.getLogger(__name__)
 
+def with_event_loop(func):
+    """Decorador para garantir que existe um loop de eventos."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        try:
+            # Importante: Não fechar o loop aqui
+            return loop.run_until_complete(func(*args, **kwargs))
+        except Exception as e:
+            logger.error(f"Erro no loop de eventos: {e}")
+            raise
+    return wrapper
+
 class AgentManager:
     """Manages the creation and configuration of the agent."""
     
     def __init__(self):
         self.site_knowledge = SiteKnowledge()
         self.tz = pytz.timezone('America/Sao_Paulo')
+                # Garantir que temos um loop de eventos principal
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
+            
         self.tools = self._create_tools()
         self.prompt = self._create_prompt()
         self.agent = self._create_agent()
         self.executor = self._create_executor()
+
+    @with_event_loop
+    async def sync_calendar_check(self, days_ahead=7):
+        """Wrapper síncrono para _handle_calendar_availability"""
+        logger.debug(f"Iniciando verificação de disponibilidade para {days_ahead} dias")
+        try:
+            if isinstance(days_ahead, str):
+                days_ahead = int(days_ahead)
+            result = await self._handle_calendar_availability(days_ahead=days_ahead)
+            logger.debug(f"Verificação de disponibilidade concluída com sucesso")
+            return result
+        except Exception as e:
+            logger.error(f"Erro no sync_calendar_check: {e}")
+            return "Desculpe, ocorreu um erro ao verificar os horários disponíveis. Por favor, tente novamente."
+
+    @with_event_loop
+    async def sync_calendar_schedule(self, start_time: str, name: str, email: str, phone: Optional[str] = None, notes: Optional[str] = None):
+        """Wrapper síncrono para _handle_calendar_scheduling"""
+        logger.debug(f"Iniciando agendamento para {name} em {start_time}")
+        try:
+            result = await self._handle_calendar_scheduling(
+                start_time=start_time,
+                name=name,
+                email=email,
+                phone=phone,
+                notes=notes
+            )
+            logger.debug("Agendamento concluído com sucesso")
+            return result
+        except Exception as e:
+            logger.error(f"Erro no sync_calendar_schedule: {e}")
+            return "Desculpe, ocorreu um erro ao agendar a reunião. Por favor, tente novamente."
+
+    @with_event_loop
+    async def sync_calendar_cancel(self, booking_id: str):
+        """Wrapper síncrono para _handle_calendar_cancellation"""
+        logger.debug(f"Iniciando cancelamento do agendamento {booking_id}")
+        try:
+            result = await self._handle_calendar_cancellation(booking_id=booking_id)
+            logger.debug("Cancelamento concluído com sucesso")
+            return result
+        except Exception as e:
+            logger.error(f"Erro no sync_calendar_cancel: {e}")
+            return "Desculpe, ocorreu um erro ao cancelar a reunião."
+
+    @with_event_loop
+    async def sync_calendar_reschedule(self, booking_id: str, new_start_time: str):
+        """Wrapper síncrono para _handle_calendar_reschedule"""
+        logger.debug(f"Iniciando reagendamento de {booking_id} para {new_start_time}")
+        try:
+            result = await self._handle_calendar_reschedule(
+                booking_id=booking_id,
+                new_start_time=new_start_time
+            )
+            logger.debug("Reagendamento concluído com sucesso")
+            return result
+        except Exception as e:
+            logger.error(f"Erro no sync_calendar_reschedule: {e}")
+            return "Desculpe, ocorreu um erro ao reagendar a reunião."
 
     async def _handle_calendar_availability(self, days_ahead: int = 7) -> str:
         """
         Verifica disponibilidade de horários no calendário.
         """
         try:
+            # Garantir que days_ahead seja um inteiro
+            if isinstance(days_ahead, str):
+                days_ahead = int(days_ahead)
+            
             slots = await calendar_service.get_availability(days_ahead=days_ahead)
             
             if not slots:
@@ -48,6 +136,9 @@ class AgentManager:
             response += "\nVocê gostaria de agendar em algum desses horários?"
             return response
             
+        except ValueError as e:
+            logger.error(f"Erro ao converter days_ahead para inteiro: {e}")
+            return "Desculpe, ocorreu um erro ao verificar os horários disponíveis. Por favor, tente novamente."
         except CalendarServiceError as e:
             logger.error(f"Erro ao verificar disponibilidade: {e}")
             return "Desculpe, não consegui verificar os horários disponíveis no momento."
@@ -155,15 +246,15 @@ class AgentManager:
             # Novas ferramentas de calendário
             Tool(
                 name="calendar_check",
-                func=self._handle_calendar_availability,
+                func=self.sync_calendar_check,
                 description=(
-                    "Verifica horários disponíveis para agendamento. "
+                    "Verifica horários disponíveis para agendamento nos próximos 7 dias. "
                     "Use quando o usuário quiser marcar uma reunião ou consultar disponibilidade."
                 )
             ),
             Tool(
                 name="calendar_schedule",
-                func=self._handle_calendar_scheduling,
+                func=self.sync_calendar_schedule,
                 description=(
                     "Agenda uma nova reunião. Use após verificar disponibilidade "
                     "e quando tiver nome, email e horário escolhido."
@@ -171,7 +262,7 @@ class AgentManager:
             ),
             Tool(
                 name="calendar_cancel",
-                func=self._handle_calendar_cancellation,
+                func=self.sync_calendar_cancel,
                 description=(
                     "Cancela uma reunião agendada. "
                     "Use quando o usuário quiser cancelar um agendamento existente."
@@ -179,7 +270,7 @@ class AgentManager:
             ),
             Tool(
                 name="calendar_reschedule",
-                func=self._handle_calendar_reschedule,
+                func=self.sync_calendar_reschedule,
                 description=(
                     "Reagenda uma reunião existente para um novo horário. "
                     "Use quando o usuário quiser mudar o horário de um agendamento."
