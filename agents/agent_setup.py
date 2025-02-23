@@ -1,6 +1,7 @@
 from functools import partial, wraps
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
+import re
 import pytz
 import logging
 import asyncio
@@ -44,25 +45,31 @@ class AgentManager:
             asyncio.get_event_loop()
         except RuntimeError:
             asyncio.set_event_loop(asyncio.new_event_loop())
-            
+
         self.tools = self._create_tools()
         self.prompt = self._create_prompt()
         self.agent = self._create_agent()
         self.executor = self._create_executor()
-
+      
     @with_event_loop
     async def sync_calendar_check(self, days_ahead=7):
-        """Wrapper síncrono para _handle_calendar_availability"""
+        """
+        Wrapper síncrono para _handle_calendar_availability.
+        
+        Args:
+            days_ahead (int|str): Número de dias para verificar disponibilidade. Padrão é 7 dias.
+            
+        Returns:
+            str: Mensagem formatada com os horários disponíveis ou mensagem de erro.
+        """
         logger.debug(f"Iniciando verificação de disponibilidade para {days_ahead} dias")
         try:
-            if isinstance(days_ahead, str):
-                days_ahead = int(days_ahead)
-            result = await self._handle_calendar_availability(days_ahead=days_ahead)
-            logger.debug(f"Verificação de disponibilidade concluída com sucesso")
+            result = await self._handle_calendar_availability(days_ahead)
+            logger.debug("Verificação de disponibilidade concluída com sucesso")
             return result
         except Exception as e:
             logger.error(f"Erro no sync_calendar_check: {e}")
-            return "Desculpe, ocorreu um erro ao verificar os horários disponíveis. Por favor, tente novamente."
+        return "Desculpe, ocorreu um erro ao verificar os horários disponíveis. Por favor, tente novamente."
 
     @with_event_loop
     async def sync_calendar_schedule(self, start_time: str, name: str, email: str, phone: Optional[str] = None, notes: Optional[str] = None):
@@ -112,23 +119,39 @@ class AgentManager:
     async def _handle_calendar_availability(self, days_ahead: int = 7) -> str:
         """
         Verifica disponibilidade de horários no calendário.
+        
+        Args:
+            days_ahead (int): Número de dias para verificar a disponibilidade. Padrão é 7 dias.
+            
+        Returns:
+            str: Mensagem formatada com os horários disponíveis ou mensagem de erro apropriada.
         """
         try:
             # Garantir que days_ahead seja um inteiro
             if isinstance(days_ahead, str):
                 days_ahead = int(days_ahead)
             
+            # Validar o range de dias
+            if days_ahead < 1:
+                days_ahead = 7
+            elif days_ahead > 60:  # Limite máximo de 60 dias
+                days_ahead = 60
+                
+            logger.debug(f"Buscando slots disponíveis para os próximos {days_ahead} dias")
             slots = await calendar_service.get_availability(days_ahead=days_ahead)
             
             if not slots:
-                return "Não encontrei horários disponíveis para os próximos dias."
+                return ("Não encontrei horários disponíveis para os próximos dias. "
+                    "Gostaria de verificar um período diferente?")
             
+            # Formatar os horários encontrados
             formatted_slots = []
-            for slot in slots[:5]:  # Limita a 5 opções
+            for slot in slots[:5]:  # Limita a 5 opções para não sobrecarregar o usuário
                 slot_time = datetime.fromisoformat(slot['startTime'])
                 local_time = slot_time.astimezone(self.tz)
                 formatted_slots.append(local_time.strftime("%d/%m/%Y às %H:%M"))
             
+            # Construir a resposta
             response = "Encontrei os seguintes horários disponíveis:\n\n"
             for i, slot in enumerate(formatted_slots, 1):
                 response += f"{i}. {slot}\n"
@@ -138,10 +161,17 @@ class AgentManager:
             
         except ValueError as e:
             logger.error(f"Erro ao converter days_ahead para inteiro: {e}")
-            return "Desculpe, ocorreu um erro ao verificar os horários disponíveis. Por favor, tente novamente."
+            return ("Desculpe, mas preciso de um número válido de dias para verificar. "
+                "Por exemplo: para ver os próximos 7 dias, use 'calendar_check 7'")
+                
         except CalendarServiceError as e:
             logger.error(f"Erro ao verificar disponibilidade: {e}")
-            return "Desculpe, não consegui verificar os horários disponíveis no momento."
+            return ("Desculpe, estou com dificuldades para verificar os horários disponíveis no momento. "
+                "Pode tentar novamente em alguns instantes?")
+                
+        except Exception as e:
+            logger.error(f"Erro inesperado ao verificar disponibilidade: {e}")
+            return "Desculpe, ocorreu um erro inesperado. Por favor, tente novamente."
 
     async def _handle_calendar_scheduling(
         self,
