@@ -1,13 +1,16 @@
-#agent_setup.py
-import logging
-from typing import List
 from functools import partial
+from typing import Dict, List, Optional
+from datetime import datetime, timedelta
+import pytz
+import logging
 from langchain.agents import Tool, AgentExecutor, create_openai_functions_agent
 from langchain.prompts import PromptTemplate
 from langchain_core.tools import BaseTool
 
 from knowledge_base.site_knowledge import SiteKnowledge, KnowledgeSource
 from services.llm import llm_openai
+from services.calendar_service import calendar_service, CalendarServiceError
+from config import CALENDAR_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -16,10 +19,120 @@ class AgentManager:
     
     def __init__(self):
         self.site_knowledge = SiteKnowledge()
+        self.tz = pytz.timezone('America/Sao_Paulo')
         self.tools = self._create_tools()
         self.prompt = self._create_prompt()
         self.agent = self._create_agent()
         self.executor = self._create_executor()
+
+    async def _handle_calendar_availability(self, days_ahead: int = 7) -> str:
+        """
+        Verifica disponibilidade de horários no calendário.
+        """
+        try:
+            slots = await calendar_service.get_availability(days_ahead=days_ahead)
+            
+            if not slots:
+                return "Não encontrei horários disponíveis para os próximos dias."
+            
+            formatted_slots = []
+            for slot in slots[:5]:  # Limita a 5 opções
+                slot_time = datetime.fromisoformat(slot['startTime'])
+                local_time = slot_time.astimezone(self.tz)
+                formatted_slots.append(local_time.strftime("%d/%m/%Y às %H:%M"))
+            
+            response = "Encontrei os seguintes horários disponíveis:\n\n"
+            for i, slot in enumerate(formatted_slots, 1):
+                response += f"{i}. {slot}\n"
+            
+            response += "\nVocê gostaria de agendar em algum desses horários?"
+            return response
+            
+        except CalendarServiceError as e:
+            logger.error(f"Erro ao verificar disponibilidade: {e}")
+            return "Desculpe, não consegui verificar os horários disponíveis no momento."
+
+    async def _handle_calendar_scheduling(
+        self,
+        start_time: str,
+        name: str,
+        email: str,
+        phone: Optional[str] = None,
+        notes: Optional[str] = None
+    ) -> str:
+        """
+        Agenda uma nova reunião.
+        """
+        try:
+            start_datetime = datetime.fromisoformat(start_time)
+            
+            booking = await calendar_service.create_booking(
+                event_type_id=None,
+                start_time=start_datetime,
+                name=name,
+                email=email,
+                phone=phone,
+                notes=notes
+            )
+            
+            if not booking:
+                return "Desculpe, não foi possível realizar o agendamento. Por favor, tente outro horário."
+            
+            local_time = start_datetime.astimezone(self.tz)
+            return (
+                f"Ótimo! Sua reunião foi agendada com sucesso para "
+                f"{local_time.strftime('%d/%m/%Y às %H:%M')}.\n\n"
+                f"Você receberá um e-mail de confirmação em {email} "
+                f"com os detalhes da reunião e o link de acesso."
+            )
+            
+        except CalendarServiceError as e:
+            logger.error(f"Erro ao agendar reunião: {e}")
+            return "Desculpe, ocorreu um erro ao tentar agendar a reunião. Por favor, tente novamente."
+
+    async def _handle_calendar_cancellation(self, booking_id: str) -> str:
+        """
+        Cancela um agendamento existente.
+        """
+        try:
+            success = await calendar_service.cancel_booking(booking_id)
+            
+            if success:
+                return "Sua reunião foi cancelada com sucesso."
+            return "Não foi possível cancelar a reunião. Por favor, verifique o código do agendamento."
+            
+        except CalendarServiceError as e:
+            logger.error(f"Erro ao cancelar reunião: {e}")
+            return "Desculpe, ocorreu um erro ao tentar cancelar a reunião."
+
+    async def _handle_calendar_reschedule(
+        self,
+        booking_id: str,
+        new_start_time: str
+    ) -> str:
+        """
+        Reagenda um compromisso existente.
+        """
+        try:
+            new_datetime = datetime.fromisoformat(new_start_time)
+            
+            booking = await calendar_service.reschedule_booking(
+                booking_id=booking_id,
+                new_start_time=new_datetime
+            )
+            
+            if not booking:
+                return "Não foi possível reagendar a reunião. Por favor, verifique o código do agendamento e o novo horário."
+            
+            local_time = new_datetime.astimezone(self.tz)
+            return (
+                f"Sua reunião foi reagendada com sucesso para "
+                f"{local_time.strftime('%d/%m/%Y às %H:%M')}."
+            )
+            
+        except CalendarServiceError as e:
+            logger.error(f"Erro ao reagendar reunião: {e}")
+            return "Desculpe, ocorreu um erro ao tentar reagendar a reunião."
 
     def _create_tools(self) -> List[BaseTool]:
         """Create and return the list of tools available to the agent."""
@@ -38,6 +151,39 @@ class AgentManager:
                 name="knowledge_search",
                 func=self.site_knowledge.query,
                 description="Busca em todas as bases de conhecimento disponíveis quando precisar de uma visão completa."
+            ),
+            # Novas ferramentas de calendário
+            Tool(
+                name="calendar_check",
+                func=self._handle_calendar_availability,
+                description=(
+                    "Verifica horários disponíveis para agendamento. "
+                    "Use quando o usuário quiser marcar uma reunião ou consultar disponibilidade."
+                )
+            ),
+            Tool(
+                name="calendar_schedule",
+                func=self._handle_calendar_scheduling,
+                description=(
+                    "Agenda uma nova reunião. Use após verificar disponibilidade "
+                    "e quando tiver nome, email e horário escolhido."
+                )
+            ),
+            Tool(
+                name="calendar_cancel",
+                func=self._handle_calendar_cancellation,
+                description=(
+                    "Cancela uma reunião agendada. "
+                    "Use quando o usuário quiser cancelar um agendamento existente."
+                )
+            ),
+            Tool(
+                name="calendar_reschedule",
+                func=self._handle_calendar_reschedule,
+                description=(
+                    "Reagenda uma reunião existente para um novo horário. "
+                    "Use quando o usuário quiser mudar o horário de um agendamento."
+                )
             )
         ]
 

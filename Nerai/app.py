@@ -144,7 +144,7 @@ async def send_delayed_message(message: str, phone: str, delay: int) -> bool:
 
 async def send_welcome_messages(formatted_data: dict, phone: str) -> bool:
     """
-    Envia mensagens de boas-vindas de forma robusta.
+    Envia mensagens de boas-vindas de forma robusta e armazena na memória do agente.
     
     Args:
         formatted_data: Dados do formulário
@@ -167,11 +167,24 @@ async def send_welcome_messages(formatted_data: dict, phone: str) -> bool:
 
         # Adiciona todas as mensagens ao histórico primeiro
         full_message = "\n".join(messages)
+        
+        # Adiciona a mensagem inicial do sistema com o contexto do lead
+        initial_context = (
+            f"=== Início de Conversa ===\n"
+            f"Lead capturado via formulário\n"
+            f"Nome: {formatted_data['nome']}\n"
+            f"Empresa: {formatted_data['empresa']}\n"
+            f"Ramo: {formatted_data['ramo']}\n"
+            f"Email: {formatted_data['email']}\n"
+            f"=== Fim do Contexto ==="
+        )
+        conversation_manager.add_message(phone, initial_context, role='system')
+        
+        # Adiciona a mensagem completa como uma única entrada do assistente
         conversation_manager.add_message(phone, full_message, role='assistant')
 
         tasks = []
         for index, message in enumerate(messages):
-            # Usar asyncio.sleep para criar um delay crescente entre mensagens
             delay = index * 2  # 0s, 2s, 4s, 6s, 8s entre mensagens
             tasks.append(
                 asyncio.create_task(
@@ -187,11 +200,21 @@ async def send_welcome_messages(formatted_data: dict, phone: str) -> bool:
         
         if not success:
             logger.error("Falha ao enviar uma ou mais mensagens de boas-vindas")
+            conversation_manager.add_message(
+                phone,
+                "ERRO: Algumas mensagens de boas-vindas não foram entregues",
+                role='system'
+            )
             
         return success
 
     except Exception as e:
         logger.error(f"Erro ao enviar mensagens de boas-vindas: {e}")
+        conversation_manager.add_message(
+            phone,
+            f"ERRO: Falha no envio de mensagens de boas-vindas: {str(e)}",
+            role='system'
+        )
         return False
 
 async def send_message_with_retry(message: str, phone: str, metadata: Optional[Dict] = None, retries: int = 3, delay: float = 1.0) -> bool:
@@ -236,9 +259,14 @@ async def form_webhook():
         data = await request.get_json()
         logger.debug(f"Dados do formulário recebidos: {data}")
 
-        # Normaliza o número do telefone usando a função específica
+        # Verifica origem do webhook para evitar loop
+        if data.get("webhook_source") == "whatsapp":
+            logger.info("Webhook originado do WhatsApp, ignorando para evitar loop")
+            return jsonify({"status": "ignored", "message": "WhatsApp webhook ignorado"}), 200
+
+        # Normaliza o número do telefone
         raw_phone = data.get('Telefone', '')
-        phone = conversation_manager.normalize_phone(raw_phone)  # Usa o mesmo normalize_phone
+        phone = conversation_manager.normalize_phone(raw_phone)
 
         # Verifica se já existe uma conversa ativa para este número
         history = conversation_manager.get_history(phone)
@@ -248,11 +276,6 @@ async def form_webhook():
                 "status": "success",
                 "message": "Conversa já existente"
             }), 200
-
-        # Verifica origem do webhook
-        if data.get("webhook_source") == "whatsapp":
-            logger.info("Webhook originado do WhatsApp, ignorando para evitar loop")
-            return jsonify({"status": "ignored", "message": "WhatsApp webhook ignorado"}), 200
 
         # Gera ID único para o formulário usando o número normalizado
         form_id = f"{data.get('Email')}:{phone}"
@@ -269,7 +292,7 @@ async def form_webhook():
         formatted_data = {
             'nome': data.get('Name', ''),
             'email': data.get('Email', ''),
-            'telefone': phone,  # Usa o número já normalizado
+            'telefone': phone,
             'empresa': data.get('empresa', ''),
             'ramo': data.get('ramo', '')
         }
@@ -303,6 +326,7 @@ async def form_webhook():
             "status": "error",
             "message": str(e)
         }), 500
+
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)

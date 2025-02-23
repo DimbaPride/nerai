@@ -107,8 +107,10 @@ class ConversationManager:
                     f"Nome: {lead.name}\n"
                     f"Empresa: {lead.company}\n"
                     f"Ramo: {lead.business}\n"
+                    f"Email: {lead.email}\n"
                 )
                 history_parts.append(context)
+                logger.debug(f"Adicionado contexto ao histórico para {number}")
             else:
                 logger.debug(f"Nenhum contexto encontrado para {number}")
             
@@ -117,9 +119,10 @@ class ConversationManager:
                 for msg in self._conversations[number]:
                     role = "Livia" if msg.role == 'assistant' else "Cliente"
                     history_parts.append(f"{role}: {msg.content}")
+                logger.debug(f"Adicionadas {len(self._conversations[number])} mensagens ao histórico para {number}")
             
             full_history = "\n".join(history_parts)
-            logger.debug(f"Histórico completo para {number}: {full_history}")
+            logger.debug(f"Histórico completo para {number}:\n{full_history}")
             return full_history
             
         except Exception as e:

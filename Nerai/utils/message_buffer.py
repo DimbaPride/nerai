@@ -1,3 +1,4 @@
+#message_buffer.py
 import time
 import asyncio
 import logging
@@ -5,6 +6,8 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from agents.agent_setup import agent_executor
 from utils.smart_message_processor import send_message_in_chunks
+from utils.conversation_manager import conversation_manager  # Adicionado import
+
 
 logger = logging.getLogger(__name__)
 
@@ -162,26 +165,44 @@ class MessageBuffer:
             self._message_buffer.pop(number)
 
     def add_to_history(self, number: str, role: str, content: str) -> None:
+        """
+        Adiciona mensagem ao histórico local e ao conversation_manager.
+        """
+        # Adiciona ao histórico local do MessageBuffer
         if number not in self._conversation_history:
             self._conversation_history[number] = []
+        
         self._conversation_history[number].append(
             ConversationMessage(role=role, content=content)
         )
+        
+        # Adiciona também ao conversation_manager
+        conversation_manager.add_message(number, content, role=role)
+        
+        logger.debug(f"Mensagem adicionada aos históricos para {number}")
+        logger.debug(f"Local history size: {len(self._conversation_history[number])}")
 
     async def _process_message(self, message: str, number: str) -> bool:
         try:
             self.add_to_history(number, "user", message)
-            result = agent_executor.invoke({
+            
+            # Obter o histórico do conversation_manager
+            history = conversation_manager.get_history(number)
+            
+            # Usar await com ainvoke
+            result = await agent_executor.ainvoke({
                 "input": message,
-                "history": self._conversation_history.get(number, [])
+                "history": history
             })
+            
             response = result.get("output", "Desculpe, ocorreu um erro. Tente novamente.")
             self.add_to_history(number, "assistant", response)
             
             # Usa o sistema de verificação de presença para enviar a resposta
             return await send_message_with_presence_check(response, number)
+            
         except Exception as e:
-            logger.error(f"Erro no processamento: {str(e)}", exc_info=True)
+            logger.error(f"Erro no processamento: {e}")
             await send_message_with_presence_check("Desculpe, ocorreu um erro. Tente novamente.", number)
             return False
 
