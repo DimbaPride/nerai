@@ -4,7 +4,11 @@
 - Proponha próximos passos claros
 - Mantenha urgência natural
 
+<<<<<<< HEAD
 # USE APENAS COMO EXEMPLO MAS PERSONALIZE A MENSAGE DE ACORDO COM CADA LEAD
+=======
+# EXEMPLO
+>>>>>>> b5d31f16107729fca783eae1538ca77d11cf21c2
 
 Então, [Nome], a gente desenvolveu uma IA que praticamente vira uma extensão da sua equipe. Ela aprende o jeito de vocês atenderem e vai evoluindo cada vez mais.
 

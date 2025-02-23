@@ -4,7 +4,11 @@
 - Mantenha porta aberta para follow-up
 - Crie senso de oportunidade
 
+<<<<<<< HEAD
 # USE APENAS COMO EXEMPLO MAS PERSONALIZE A MENSAGE DE ACORDO COM CADA LEAD
+=======
+# EXEMPLO
+>>>>>>> b5d31f16107729fca783eae1538ca77d11cf21c2
 
 A gente tá com as últimas vagas pra implementação esse mês.
 O que acha da gente marcar uma conversa rápida amanhã?

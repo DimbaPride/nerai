@@ -75,7 +75,7 @@ class ConfigurationManager:
     # Define configurações dos modelos
     MODELS = {
         ModelProvider.OPENAI: ModelConfig(
-            name="gpt-4-turbo-preview",
+            name="gpt-4o-mini",
             provider=ModelProvider.OPENAI
         ),
         ModelProvider.GROQ: ModelConfig(

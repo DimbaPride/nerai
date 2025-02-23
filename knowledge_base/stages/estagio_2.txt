@@ -4,7 +4,11 @@
 - Use gatilhos de identificação
 - Demonstre compreensão do setor
 
+<<<<<<< HEAD
 # USE APENAS COMO EXEMPLO MAS PERSONALIZE A MENSAGE DE ACORDO COM CADA LEAD
+=======
+# EXEMPLO
+>>>>>>> b5d31f16107729fca783eae1538ca77d11cf21c2
 
 [Nome], me conta uma coisa...
 Como vocês tão fazendo hoje pra dar conta de todos os atendimentos?

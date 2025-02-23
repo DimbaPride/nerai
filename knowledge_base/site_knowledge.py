@@ -4,13 +4,14 @@ import logging
 from typing import Optional, List, Any, Dict
 from dataclasses import dataclass, field
 from enum import Enum
+import torch
 
 from bs4 import BeautifulSoup
 from langchain_community.document_loaders import PlaywrightURLLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
-from langchain_openai import OpenAIEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,12 @@ class SiteKnowledge:
             KnowledgeSource.WEBSITE: None,
             KnowledgeSource.STAGES: None
         }
+        self.embeddings = HuggingFaceEmbeddings(
+            model_name="intfloat/multilingual-e5-large",
+            model_kwargs={
+                'device': 'cuda' if torch.cuda.is_available() else 'cpu'
+            }
+        )
 
     def needs_update(self, source: KnowledgeSource) -> bool:
         """Verifica se uma fonte específica precisa ser atualizada."""
@@ -202,8 +209,7 @@ class SiteKnowledge:
     def _create_vectorstore(self, splits: List[Document]) -> SafeFAISS:
         """Cria a base vetorial usando SafeFAISS."""
         logger.info("Criando embeddings...")
-        embeddings = OpenAIEmbeddings()
-        base_vectorstore = FAISS.from_documents(splits, embeddings)
+        base_vectorstore = FAISS.from_documents(splits, self.embeddings)
         
         # Criação do SafeFAISS com todos os parâmetros necessários
         return SafeFAISS(
@@ -241,8 +247,7 @@ class SiteKnowledge:
                 logger.debug(f"Diretório {source_dir} não existe")
                 return None
                 
-            embeddings = OpenAIEmbeddings()
-            return SafeFAISS.load_local(source_dir, embeddings, allow_dangerous_deserialization=True)
+            return SafeFAISS.load_local(source_dir, self.embeddings, allow_dangerous_deserialization=True)
         except Exception as e:
             logger.error(f"Erro ao carregar base {source.value}: {str(e)}")
             return None

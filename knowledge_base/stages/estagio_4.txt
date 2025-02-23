@@ -4,7 +4,11 @@
 - Destaque benefícios práticos
 - Mantenha foco em resultados
 
+<<<<<<< HEAD
 # USE APENAS COMO EXEMPLO MAS PERSONALIZE A MENSAGE DE ACORDO COM CADA LEAD
+=======
+# EXEMPLO
+>>>>>>> b5d31f16107729fca783eae1538ca77d11cf21c2
 
 [Nome], adorei te conhecer melhor!
 Tô vendo que vocês têm muito potencial pra crescer ainda mais. Sabe o que é mais legal?

@@ -11,7 +11,7 @@ from quart import Quart, request, jsonify
 
 from agents.agent_setup import agent_manager  # Modificado para usar agent_manager
 from services.audio_processing import handle_audio_message
-from utils.message_buffer import handle_message_with_buffer, update_presence  # Adicionada importação
+from utils.message_buffer import handle_message_with_buffer, message_buffer, update_presence  # Modificada importação
 from utils.smart_message_processor import send_message_in_chunks
 from utils.conversation_manager import conversation_manager
 
