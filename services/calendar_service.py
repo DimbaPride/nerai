@@ -219,6 +219,42 @@ class CalendarService:
             logger.error(f"Erro ao agendar evento: {e}")
             raise CalendarServiceError(f"Falha ao agendar evento: {str(e)}")
 
+    def format_availability_response(slots_data: Dict[str, Dict[str, List[Dict[str, str]]]], timezone: str = "America/Sao_Paulo") -> str:
+        """
+        Formata os slots disponíveis em uma mensagem amigável para o usuário.
+        """
+        if not slots_data.get("slots"):
+            return "Não há horários disponíveis no período solicitado."
+        
+        tz = ZoneInfo(timezone)
+        message_parts = ["Horários disponíveis:"]
+        
+        for date, slots in sorted(slots_data["slots"].items()):
+            # Converter data para formato local
+            date_obj = datetime.strptime(date, "%Y-%m-%d")
+            local_date = date_obj.strftime("%d/%m/%Y (%A)")
+            
+            # Traduzir dia da semana
+            local_date = local_date.replace("Monday", "Segunda-feira")\
+                                .replace("Tuesday", "Terça-feira")\
+                                .replace("Wednesday", "Quarta-feira")\
+                                .replace("Thursday", "Quinta-feira")\
+                                .replace("Friday", "Sexta-feira")\
+                                .replace("Saturday", "Sábado")\
+                                .replace("Sunday", "Domingo")
+            
+            message_parts.append(f"\n📅 {local_date}")
+            
+            for slot in slots:
+                # Converter horário para local
+                utc_time = datetime.fromisoformat(slot["time"].replace('Z', '+00:00'))
+                local_time = utc_time.astimezone(tz)
+                
+                message_parts.append(f"⏰ {local_time.strftime('%H:%M')} "
+                                f"({slot.get('duration', 60)} minutos)")
+        
+        return "\n".join(message_parts)        
+
     async def _make_request(
         self,
         method: str,

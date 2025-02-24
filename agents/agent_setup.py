@@ -72,10 +72,35 @@ class AgentManager:
         return "Desculpe, ocorreu um erro ao verificar os horários disponíveis. Por favor, tente novamente."
 
     @with_event_loop
-    async def sync_calendar_schedule(self, start_time: str, name: str, email: str, phone: Optional[str] = None, notes: Optional[str] = None):
+    async def sync_calendar_schedule(
+        self,
+        start_time: str,
+        name: str,
+        email: str,
+        phone: Optional[str] = None,
+        notes: Optional[str] = None
+    ) -> str:
         """Wrapper síncrono para _handle_calendar_scheduling"""
         logger.debug(f"Iniciando agendamento para {name} em {start_time}")
         try:
+            # Validar parâmetros obrigatórios
+            if not all([start_time, name, email]):
+                missing = []
+                if not start_time: missing.append("data e hora")
+                if not name: missing.append("nome")
+                if not email: missing.append("email")
+                return f"Para agendar, preciso dos seguintes dados: {', '.join(missing)}"
+
+            # Validar formato do email
+            if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+                return "Por favor, forneça um endereço de email válido."
+
+            # Validar formato da data
+            try:
+                datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+            except ValueError:
+                return "Por favor, forneça uma data e hora válidas no formato YYYY-MM-DDTHH:MM:SS"
+
             result = await self._handle_calendar_scheduling(
                 start_time=start_time,
                 name=name,
@@ -138,27 +163,39 @@ class AgentManager:
                 days_ahead = 60
                 
             logger.debug(f"Buscando slots disponíveis para os próximos {days_ahead} dias")
+            
+            # Usar o novo método de get_availability
             slots = await calendar_service.get_availability(days_ahead=days_ahead)
             
-            if not slots:
+            if not slots.get("slots"):
                 return ("Não encontrei horários disponíveis para os próximos dias. "
                     "Gostaria de verificar um período diferente?")
             
-            # Formatar os horários encontrados
-            formatted_slots = []
-            for slot in slots[:5]:  # Limita a 5 opções para não sobrecarregar o usuário
-                slot_time = datetime.fromisoformat(slot['startTime'])
-                local_time = slot_time.astimezone(self.tz)
-                formatted_slots.append(local_time.strftime("%d/%m/%Y às %H:%M"))
+            # Construir a resposta usando os slots organizados por data
+            response_parts = ["Encontrei os seguintes horários disponíveis:\n"]
             
-            # Construir a resposta
-            response = "Encontrei os seguintes horários disponíveis:\n\n"
-            for i, slot in enumerate(formatted_slots, 1):
-                response += f"{i}. {slot}\n"
+            for date, day_slots in sorted(slots["slots"].items())[:7]:  # Limita a 7 dias
+                # Converter a data para datetime para formatação
+                date_obj = datetime.strptime(date, "%Y-%m-%d")
+                date_str = date_obj.strftime("%d/%m/%Y (%A)").replace("Monday", "Segunda-feira")\
+                                                            .replace("Tuesday", "Terça-feira")\
+                                                            .replace("Wednesday", "Quarta-feira")\
+                                                            .replace("Thursday", "Quinta-feira")\
+                                                            .replace("Friday", "Sexta-feira")\
+                                                            .replace("Saturday", "Sábado")\
+                                                            .replace("Sunday", "Domingo")
+                
+                response_parts.append(f"\n*{date_str}*")
+                
+                # Limitar a 5 slots por dia para não sobrecarregar
+                for slot in day_slots[:5]:
+                    slot_time = datetime.fromisoformat(slot["time"].replace('Z', '+00:00'))
+                    local_time = slot_time.astimezone(self.tz)
+                    response_parts.append(f"- {local_time.strftime('%H:%M')} ({slot['duration']} min)")
             
-            response += "\nVocê gostaria de agendar em algum desses horários?"
-            return response
-            
+            response_parts.append("\nVocê gostaria de agendar em algum desses horários?")
+            return "\n".join(response_parts)
+                
         except ValueError as e:
             logger.error(f"Erro ao converter days_ahead para inteiro: {e}")
             return ("Desculpe, mas preciso de um número válido de dias para verificar. "
@@ -185,15 +222,37 @@ class AgentManager:
         Agenda uma nova reunião.
         """
         try:
-            start_datetime = datetime.fromisoformat(start_time)
+            # Converter o horário para UTC se necessário
+            start_datetime = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
             
-            booking = await calendar_service.create_booking(
-                event_type_id=None,
+            # Verificar se o horário ainda está disponível
+            available_slots = await calendar_service.get_availability(
+                start_date=start_datetime,
+                days_ahead=1
+            )
+            
+            # Verificar se o horário escolhido está nos slots disponíveis
+            slot_available = False
+            if available_slots.get("slots"):
+                date_key = start_datetime.strftime("%Y-%m-%d")
+                if date_key in available_slots["slots"]:
+                    for slot in available_slots["slots"][date_key]:
+                        slot_time = datetime.fromisoformat(slot["time"].replace('Z', '+00:00'))
+                        if abs((slot_time - start_datetime).total_seconds()) < 60:  # Diferença de 1 minuto
+                            slot_available = True
+                            break
+            
+            if not slot_available:
+                return ("Desculpe, mas este horário não está mais disponível. "
+                    "Gostaria de verificar outros horários?")
+            
+            # Agendar o evento
+            booking = await calendar_service.schedule_event(
+                event_type_id=calendar_service.default_event_type_id,
                 start_time=start_datetime,
                 name=name,
                 email=email,
-                phone=phone,
-                notes=notes
+                notes=f"Telefone: {phone}\n{notes if notes else ''}"
             )
             
             if not booking:
@@ -284,10 +343,20 @@ class AgentManager:
             ),
             Tool(
                 name="calendar_schedule",
-                func=self.sync_calendar_schedule,
+                func=lambda **kwargs: self.sync_calendar_schedule(
+                    start_time=kwargs.get('date'),  # Altera de 'date' para 'start_time' para combinar com o método
+                    name=kwargs.get('name'),
+                    email=kwargs.get('email'),
+                    phone=kwargs.get('phone'),
+                    notes=kwargs.get('notes')
+                ),
                 description=(
-                    "Agenda uma nova reunião. Use após verificar disponibilidade "
-                    "e quando tiver nome, email e horário escolhido."
+                    "Agenda uma nova reunião. Requer os seguintes parâmetros:\n"
+                    "- date: Data e hora no formato YYYY-MM-DDTHH:MM:SS\n"
+                    "- name: Nome completo do cliente\n"
+                    "- email: Email do cliente\n"
+                    "- phone: (opcional) Telefone do cliente\n"
+                    "- notes: (opcional) Observações adicionais"
                 )
             ),
             Tool(
@@ -339,7 +408,6 @@ class AgentManager:
         """Initialize the knowledge base."""
         await self.site_knowledge.initialize()
 
-# System prompt definition
 SYSTEM_PROMPT = """# 1.Identidade Base
 Você é a Livia, Atendente da Nerai. Sua missão é qualificar leads e gerar oportunidades de negócio através de conversas naturais e estratégicas no WhatsApp. Você representa uma empresa líder em soluções de IA que transforma negócios comuns em extraordinários.
 
@@ -373,6 +441,32 @@ Converse como um verdadeiro brasileiro: seja caloroso e acolhedor, mas mantenha 
 - DEMONSTRAÇÃO: Explicação prática de como a IA se integra à operação, enfatizando resultados imediatos. 
 - FECHAMENTO: Criação de urgência natural através de vagas limitadas e proposta de próximos passos concretos. 
 
+## Fluxo de Agendamento
+Quando o cliente demonstrar interesse em agendar uma demonstração:
+
+1. Verificação de Disponibilidade:
+   - Use 'calendar_check' para buscar horários disponíveis
+   - Apresente as opções de forma clara e objetiva
+   - Mantenha o tom natural da conversa
+
+2. Coleta de Informações:
+   - Após o cliente escolher um horário, colete:
+     - Nome completo
+     - Email profissional
+     - Telefone (se não tiver ainda)
+   - Faça isso de forma natural, como parte da conversa
+
+3. Confirmação do Agendamento:
+   - Use 'calendar_schedule' com os dados coletados
+   - Formato da data deve ser: YYYY-MM-DDTHH:MM:SS
+   - Confirme os detalhes do agendamento
+   - Explique os próximos passos
+
+4. Pós-Agendamento:
+   - Reforce que um email de confirmação será enviado
+   - Mantenha o tom acolhedor
+   - Pergunte se há mais alguma dúvida
+
 ## Uso das Ferramentas para exemplos de mensagem do Fluxo de Conversação
 - Para cada estágio, SEMPRE use a ferramenta 'estagios_conversas' com a consulta específica
 - estagio_1: Use 'estagios_conversas' com "mensagens para estágio 1 de abertura"
@@ -381,6 +475,17 @@ Converse como um verdadeiro brasileiro: seja caloroso e acolhedor, mas mantenha 
 - estagio_4: Use 'estagios_conversas' com "mensagens para estágio 4 de construção da solução"
 - estagio_5: Use 'estagios_conversas' com "mensagens para estágio 5 de demonstração de valor"
 - estagio_6: Use 'estagios_conversas' com "mensagens para estágio 6 de fechamento"
+
+## Uso das Ferramentas de Calendário
+1. 'calendar_check': Use para verificar disponibilidade
+   - Exemplo: calendar_check(7) para próximos 7 dias
+
+2. 'calendar_schedule': Use para agendar reunião
+   - Parâmetros necessários:
+     - date: "YYYY-MM-DDTHH:MM:SS"
+     - name: "Nome completo"
+     - email: "email@dominio.com"
+     - phone: "(opcional) telefone"
 
 ## Proibições
 - Não use linguagem comercial agressiva
@@ -391,6 +496,8 @@ Converse como um verdadeiro brasileiro: seja caloroso e acolhedor, mas mantenha 
 - Não use emoji
 - Não use asterisco duplo para negrito
 - Não mande mensagens grandes robotizadas
+- Não agende sem confirmar todos os dados necessários
+- Não confirme agendamento sem usar calendar_schedule
 
 ## Checklist de Qualidade
 ### Antes de cada mensagem, verifique:
@@ -399,6 +506,7 @@ Converse como um verdadeiro brasileiro: seja caloroso e acolhedor, mas mantenha 
 - Mensagem mantém tom natural, humanizado e profissional?
 - Estágio do fluxo está sendo respeitado?
 - Personalização está adequada?
+- Dados de agendamento estão completos e corretos?
 
 # 4.Métricas de Sucesso
 - Engajamento do lead na conversa
@@ -406,6 +514,7 @@ Converse como um verdadeiro brasileiro: seja caloroso e acolhedor, mas mantenha 
 - Progresso natural pelos estágios
 - Agendamentos de demonstração
 - Manutenção do tom adequado
+- Taxa de confirmação de agendamentos
 
 # 5.IMPORTANTE
 - SEMPRE use 'estagios_conversas' para obter o exemplo de formato correto da mensagem para cada estágio
@@ -414,7 +523,8 @@ Converse como um verdadeiro brasileiro: seja caloroso e acolhedor, mas mantenha 
 - NUNCA improvise ou suponha informações
 - Se não encontrar a informação, solicite mais detalhes
 - Não repetir todas as interações do cliente
-
+- Sempre confirme os dados antes de agendar
+- Sempre use as ferramentas de calendário na ordem correta
 
 # 6.USO DAS FERRAMENTAS
 1. 'estagios_conversas': Use para consultar a mensagem correta para cada estágio
@@ -426,7 +536,11 @@ Converse como um verdadeiro brasileiro: seja caloroso e acolhedor, mas mantenha 
    - Tecnologias utilizadas
    - Metodologias
    - Equipe e expertise
-   - Diferenciais"""
+   - Diferenciais
+
+3. 'calendar_check': Use para verificar disponibilidade de horários
+
+4. 'calendar_schedule': Use para confirmar agendamentos"""
 
 # Create instance of AgentManager
 agent_manager = AgentManager()
