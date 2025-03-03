@@ -10,6 +10,7 @@ from langchain.prompts import PromptTemplate
 from langchain_core.tools import BaseTool
 
 from knowledge_base.site_knowledge import SiteKnowledge, KnowledgeSource
+from langchain_core.tools import StructuredTool
 from services.llm import llm_openai
 from services.calendar_service import calendar_service, CalendarServiceError
 from config import CALENDAR_CONFIG
@@ -70,7 +71,7 @@ class AgentManager:
         except Exception as e:
             logger.error(f"Erro no sync_calendar_check: {e}")
         return "Desculpe, ocorreu um erro ao verificar os horários disponíveis. Por favor, tente novamente."
-
+    
     @with_event_loop
     async def sync_calendar_schedule(
         self,
@@ -83,6 +84,12 @@ class AgentManager:
         """Wrapper síncrono para _handle_calendar_scheduling"""
         logger.debug(f"Iniciando agendamento para {name} em {start_time}")
         try:
+            # Verificar se os dados parecem ser valores padrão/genéricos
+            if name.lower() in ['cliente', 'customer', 'user', 'usuário', 'lead'] or \
+               email.lower() in ['cliente@dominio.com', 'email@dominio.com', 'user@email.com']:
+                return ("Para agendar a reunião, preciso de dados específicos do cliente. "
+                        "Por favor, primeiro pergunte o nome completo e o email profissional.")
+
             # Validar parâmetros obrigatórios
             if not all([start_time, name, email]):
                 missing = []
@@ -90,26 +97,41 @@ class AgentManager:
                 if not name: missing.append("nome")
                 if not email: missing.append("email")
                 return f"Para agendar, preciso dos seguintes dados: {', '.join(missing)}"
-
+    
             # Validar formato do email
             if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
                 return "Por favor, forneça um endereço de email válido."
-
+    
             # Validar formato da data
             try:
-                datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                start_datetime = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
             except ValueError:
                 return "Por favor, forneça uma data e hora válidas no formato YYYY-MM-DDTHH:MM:SS"
-
-            result = await self._handle_calendar_scheduling(
-                start_time=start_time,
-                name=name,
-                email=email,
-                phone=phone,
-                notes=notes
-            )
-            logger.debug("Agendamento concluído com sucesso")
-            return result
+    
+            # Usar implementação síncrona para evitar problemas com asyncio
+            try:
+                booking = calendar_service.schedule_event_sync(
+                    event_type_id=calendar_service.default_event_type_id,
+                    start_time=start_datetime,
+                    name=name,
+                    email=email,
+                    notes=f"Telefone: {phone}\n{notes if notes else ''}"
+                )
+                
+                if not booking:
+                    return "Desculpe, não foi possível realizar o agendamento. Por favor, tente outro horário."
+                
+                local_time = start_datetime.astimezone(self.tz)
+                return (
+                    f"Ótimo! Sua reunião foi agendada com sucesso para "
+                    f"{local_time.strftime('%d/%m/%Y às %H:%M')}.\n\n"
+                    f"Você receberá um e-mail de confirmação em {email} "
+                    f"com os detalhes da reunião e o link de acesso."
+                )
+            except CalendarServiceError as e:
+                logger.error(f"Erro ao agendar reunião: {e}")
+                return f"Desculpe, ocorreu um erro ao agendar a reunião: {str(e)}"
+                
         except Exception as e:
             logger.error(f"Erro no sync_calendar_schedule: {e}")
             return "Desculpe, ocorreu um erro ao agendar a reunião. Por favor, tente novamente."
@@ -144,12 +166,6 @@ class AgentManager:
     async def _handle_calendar_availability(self, days_ahead: int = 7) -> str:
         """
         Verifica disponibilidade de horários no calendário.
-        
-        Args:
-            days_ahead (int): Número de dias para verificar a disponibilidade. Padrão é 7 dias.
-            
-        Returns:
-            str: Mensagem formatada com os horários disponíveis ou mensagem de erro apropriada.
         """
         try:
             # Garantir que days_ahead seja um inteiro
@@ -164,8 +180,8 @@ class AgentManager:
                 
             logger.debug(f"Buscando slots disponíveis para os próximos {days_ahead} dias")
             
-            # Usar o novo método de get_availability
-            slots = await calendar_service.get_availability(days_ahead=days_ahead)
+            # ALTERAÇÃO PRINCIPAL: usar método SÍNCRONO em vez do assíncrono
+            slots = calendar_service.get_availability_sync(days_ahead=days_ahead)
             
             if not slots.get("slots"):
                 return ("Não encontrei horários disponíveis para os próximos dias. "
@@ -188,7 +204,7 @@ class AgentManager:
                 response_parts.append(f"\n*{date_str}*")
                 
                 # Limitar a 5 slots por dia para não sobrecarregar
-                for slot in day_slots[:5]:
+                for slot in day_slots:
                     slot_time = datetime.fromisoformat(slot["time"].replace('Z', '+00:00'))
                     local_time = slot_time.astimezone(self.tz)
                     response_parts.append(f"- {local_time.strftime('%H:%M')} ({slot['duration']} min)")
@@ -314,6 +330,8 @@ class AgentManager:
             logger.error(f"Erro ao reagendar reunião: {e}")
             return "Desculpe, ocorreu um erro ao tentar reagendar a reunião."
 
+    
+    # Agora, substitua a ferramenta calendar_schedule no método _create_tools():
     def _create_tools(self) -> List[BaseTool]:
         """Create and return the list of tools available to the agent."""
         return [
@@ -322,17 +340,13 @@ class AgentManager:
                 func=partial(self.site_knowledge.query, source=KnowledgeSource.WEBSITE),
                 description="Consulta informações específicas do site nerai.com.br. Use esta ferramenta para responder perguntas sobre a empresa e seus serviços."
             ),
-            Tool(
-                name="estagios_conversas",
-                func=partial(self.site_knowledge.query, source=KnowledgeSource.STAGES),
-                description="Consulta o formato correto da mensagem para cada estágio da conversa. Use esta ferramenta SEMPRE antes de responder, fornecendo o estágio atual."
-            ),
+            
             Tool(
                 name="knowledge_search",
                 func=self.site_knowledge.query,
                 description="Busca em todas as bases de conhecimento disponíveis quando precisar de uma visão completa."
             ),
-            # Novas ferramentas de calendário
+            
             Tool(
                 name="calendar_check",
                 func=self.sync_calendar_check,
@@ -341,24 +355,21 @@ class AgentManager:
                     "Use quando o usuário quiser marcar uma reunião ou consultar disponibilidade."
                 )
             ),
-            Tool(
+            
+            # Substituir Tool por StructuredTool para resolver o problema de múltiplos argumentos
+            StructuredTool.from_function(
+                func=self.calendar_schedule_wrapper,  # Use o wrapper em vez da função direta
                 name="calendar_schedule",
-                func=lambda **kwargs: self.sync_calendar_schedule(
-                    start_time=kwargs.get('date'),  # Altera de 'date' para 'start_time' para combinar com o método
-                    name=kwargs.get('name'),
-                    email=kwargs.get('email'),
-                    phone=kwargs.get('phone'),
-                    notes=kwargs.get('notes')
-                ),
                 description=(
                     "Agenda uma nova reunião. Requer os seguintes parâmetros:\n"
-                    "- date: Data e hora no formato YYYY-MM-DDTHH:MM:SS\n"
+                    "- start_time: Data e hora no formato YYYY-MM-DDTHH:MM:SS\n"
                     "- name: Nome completo do cliente\n"
                     "- email: Email do cliente\n"
-                    "- phone: (opcional) Telefone do cliente\n"
+                    "- phone: (opcional) Será usado o número do WhatsApp automaticamente\n"
                     "- notes: (opcional) Observações adicionais"
                 )
             ),
+            
             Tool(
                 name="calendar_cancel",
                 func=self.sync_calendar_cancel,
@@ -367,6 +378,7 @@ class AgentManager:
                     "Use quando o usuário quiser cancelar um agendamento existente."
                 )
             ),
+            
             Tool(
                 name="calendar_reschedule",
                 func=self.sync_calendar_reschedule,
@@ -408,6 +420,72 @@ class AgentManager:
         """Initialize the knowledge base."""
         await self.site_knowledge.initialize()
 
+    def calendar_schedule_wrapper(self, **kwargs):
+        """
+        Wrapper robusto para sync_calendar_schedule que lida com qualquer forma de entrada
+        """
+        logger.debug(f"calendar_schedule_wrapper chamado com: {kwargs}")
+        
+        # Extrair os parâmetros corretamente de qualquer fonte possível
+        start_time = None
+        name = None
+        email = None
+        phone = None
+        notes = None
+        
+        # CASO 1: Se os parâmetros foram passados diretamente no kwargs
+        if 'start_time' in kwargs:
+            start_time = kwargs.get('start_time')
+        elif 'date' in kwargs:  # nome alternativo do parâmetro
+            start_time = kwargs.get('date')
+            
+        if 'name' in kwargs:
+            name = kwargs.get('name')
+            
+        if 'email' in kwargs:
+            email = kwargs.get('email')
+            
+        if 'phone' in kwargs:
+            phone = kwargs.get('phone')
+            
+        if 'notes' in kwargs:
+            notes = kwargs.get('notes')
+        
+        # CASO 2: Se os dados vieram em um dicionário dentro de 'args'
+        if 'args' in kwargs and len(kwargs['args']) > 0:
+            args = kwargs['args']
+            if isinstance(args[0], dict):
+                arg_dict = args[0]
+                if start_time is None and 'start_time' in arg_dict:
+                    start_time = arg_dict.get('start_time')
+                if name is None and 'name' in arg_dict:
+                    name = arg_dict.get('name')
+                if email is None and 'email' in arg_dict:
+                    email = arg_dict.get('email')
+                if phone is None and 'phone' in arg_dict:
+                    phone = arg_dict.get('phone')
+                if notes is None and 'notes' in arg_dict:
+                    notes = arg_dict.get('notes')
+        
+        # Verificar se os dados essenciais foram encontrados
+        logger.debug(f"Parâmetros extraídos: start_time={start_time}, name={name}, email={email}, phone={phone}")
+        
+        if not all([start_time, name, email]):
+            missing = []
+            if not start_time: missing.append("data e hora")
+            if not name: missing.append("nome")
+            if not email: missing.append("email")
+            return f"Não foi possível agendar porque faltam os seguintes dados: {', '.join(missing)}"
+        
+        # Agora é seguro chamar o método real
+        return self.sync_calendar_schedule(
+            start_time=start_time,
+            name=name,
+            email=email,
+            phone=phone or "",
+            notes=notes or ""
+        )
+
 SYSTEM_PROMPT = """# 1.Identidade Base
 Você é a Livia, Atendente da Nerai. Sua missão é qualificar leads e gerar oportunidades de negócio através de conversas naturais e estratégicas no WhatsApp. Você representa uma empresa líder em soluções de IA que transforma negócios comuns em extraordinários.
 
@@ -421,11 +499,8 @@ Converse como um verdadeiro brasileiro: seja caloroso e acolhedor, mas mantenha 
 
 # 3.Regras Fundamentais
 
-## objetivo
-- Eu quero que você consulte os estagios e o fluxo apenas para se basear em como você deve se comunicar, não quero que você siga o fluxo 100% so cpiando e colando as mensagens, afinal você é um agente autonomo e tem vida propria
-
 ## Estilo de comunicação
-- Use um único asterisco para negrito (Ex: palavra)
+- Use um único asterisco para negrito (Ex: *palavra*)
 - Nunca use emojis
 - Use linguagem natural brasileira com estilo de comunicação do WhatsApp
 - Limite de até 250 caracteres por mensagem
@@ -434,12 +509,12 @@ Converse como um verdadeiro brasileiro: seja caloroso e acolhedor, mas mantenha 
 
 ## Fluxo de conversa
 
-- ABERTURA (Situação): Primeiro contato personalizado demonstrando conhecimento prévio da empresa e setor do prospect.
-- EXPLORAÇÃO (Problema): Investigação do cenário atual através de perguntas abertas sobre processos de atendimento e desafios com volume.
-- APROFUNDAMENTO (Implicação): Exploração das consequências dos problemas identificados, focando em perdas concretas. 
-- CONSTRUÇÃO (Solução): Apresentação de casos de sucesso do mesmo setor com métricas concretas. 
-- DEMONSTRAÇÃO: Explicação prática de como a IA se integra à operação, enfatizando resultados imediatos. 
-- FECHAMENTO: Criação de urgência natural através de vagas limitadas e proposta de próximos passos concretos. 
+- Inicie com um cumprimento personalizado, demonstrando conhecimento prévio da empresa e setor do prospect quando possível.
+- Investigue o cenário atual através de perguntas abertas sobre processos de atendimento e desafios com volume.
+- Explore as consequências dos problemas identificados, focando em perdas concretas.
+- Apresente casos de sucesso do mesmo setor com métricas concretas.
+- Explique de forma prática como a IA se integra à operação, enfatizando resultados imediatos.
+- Crie urgência natural e proponha próximos passos concretos.
 
 ## Fluxo de Agendamento
 Quando o cliente demonstrar interesse em agendar uma demonstração:
@@ -450,10 +525,10 @@ Quando o cliente demonstrar interesse em agendar uma demonstração:
    - Mantenha o tom natural da conversa
 
 2. Coleta de Informações:
-   - Após o cliente escolher um horário, colete:
+   - Após o cliente escolher um horário, colete APENAS:
      - Nome completo
      - Email profissional
-     - Telefone (se não tiver ainda)
+   - NÃO peça o telefone do cliente, será usado automaticamente o número do WhatsApp atual
    - Faça isso de forma natural, como parte da conversa
 
 3. Confirmação do Agendamento:
@@ -467,25 +542,17 @@ Quando o cliente demonstrar interesse em agendar uma demonstração:
    - Mantenha o tom acolhedor
    - Pergunte se há mais alguma dúvida
 
-## Uso das Ferramentas para exemplos de mensagem do Fluxo de Conversação
-- Para cada estágio, SEMPRE use a ferramenta 'estagios_conversas' com a consulta específica
-- estagio_1: Use 'estagios_conversas' com "mensagens para estágio 1 de abertura"
-- estagio_2: Use 'estagios_conversas' com "mensagens para estágio 2 de exploração inicial"
-- estagio_3: Use 'estagios_conversas' com "mensagens para estágio 3 de aprofundamento"
-- estagio_4: Use 'estagios_conversas' com "mensagens para estágio 4 de construção da solução"
-- estagio_5: Use 'estagios_conversas' com "mensagens para estágio 5 de demonstração de valor"
-- estagio_6: Use 'estagios_conversas' com "mensagens para estágio 6 de fechamento"
-
 ## Uso das Ferramentas de Calendário
 1. 'calendar_check': Use para verificar disponibilidade
    - Exemplo: calendar_check(7) para próximos 7 dias
 
+
 2. 'calendar_schedule': Use para agendar reunião
    - Parâmetros necessários:
-     - date: "YYYY-MM-DDTHH:MM:SS"
+     - start_time: "YYYY-MM-DDTHH:MM:SS"
      - name: "Nome completo"
      - email: "email@dominio.com"
-     - phone: "(opcional) telefone"
+     - phone: Não é necessário fornecer, será usado automaticamente o número do WhatsApp
 
 ## Proibições
 - Não use linguagem comercial agressiva
@@ -504,20 +571,17 @@ Quando o cliente demonstrar interesse em agendar uma demonstração:
 - Informação está alinhada com base de conhecimento?
 - Formatação do WhatsApp está correta?
 - Mensagem mantém tom natural, humanizado e profissional?
-- Estágio do fluxo está sendo respeitado?
 - Personalização está adequada?
 - Dados de agendamento estão completos e corretos?
 
 # 4.Métricas de Sucesso
 - Engajamento do lead na conversa
 - Qualidade das informações coletadas
-- Progresso natural pelos estágios
 - Agendamentos de demonstração
 - Manutenção do tom adequado
 - Taxa de confirmação de agendamentos
 
 # 5.IMPORTANTE
-- SEMPRE use 'estagios_conversas' para obter o exemplo de formato correto da mensagem para cada estágio
 - Use 'site_knowledge' para consultar informações específicas do site da Nerai
 - Use apenas informações confirmadas pela base de conhecimento
 - NUNCA improvise ou suponha informações
@@ -527,10 +591,7 @@ Quando o cliente demonstrar interesse em agendar uma demonstração:
 - Sempre use as ferramentas de calendário na ordem correta
 
 # 6.USO DAS FERRAMENTAS
-1. 'estagios_conversas': Use para consultar a mensagem correta para cada estágio
-   Exemplo: "mensagens para estágio 1 de abertura"
-   
-2. 'site_knowledge': Use para consultar:
+1. 'site_knowledge': Use para consultar:
    - Serviços e soluções
    - Projetos e cases
    - Tecnologias utilizadas
@@ -538,9 +599,9 @@ Quando o cliente demonstrar interesse em agendar uma demonstração:
    - Equipe e expertise
    - Diferenciais
 
-3. 'calendar_check': Use para verificar disponibilidade de horários
+2. 'calendar_check': Use para verificar disponibilidade de horários
 
-4. 'calendar_schedule': Use para confirmar agendamentos"""
+3. 'calendar_schedule': Use para confirmar agendamentos"""
 
 # Create instance of AgentManager
 agent_manager = AgentManager()

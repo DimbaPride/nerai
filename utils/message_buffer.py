@@ -132,7 +132,7 @@ class MessageBufferConfig:
     """
     max_buffer_size: int = 100
     check_interval: float = 0.1
-    presence_timeout: int = 5
+    presence_timeout: int = 2
 
 @dataclass
 class ConversationMessage:
@@ -192,7 +192,8 @@ class MessageBuffer:
             # Usar await com ainvoke
             result = await agent_executor.ainvoke({
                 "input": message,
-                "history": history
+                "history": history,
+                "whatsapp_number": number
             })
             
             response = result.get("output", "Desculpe, ocorreu um erro. Tente novamente.")

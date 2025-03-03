@@ -15,9 +15,9 @@ from langchain_huggingface import HuggingFaceEmbeddings
 
 logger = logging.getLogger(__name__)
 
+# Remover STAGES do enum
 class KnowledgeSource(Enum):
     WEBSITE = "website"
-    STAGES = "stages"
 
 # Constantes de configuração
 KNOWLEDGE_BASE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "knowledge_base")
@@ -38,20 +38,15 @@ class KnowledgeBaseConfig:
 
     def __post_init__(self):
         """Inicializa diretórios após a criação da instância."""
-        self.stages_dir = os.path.join(self.base_dir, "stages")
         self.website_dir = os.path.join(self.base_dir, "website")
         logger.debug(f"Base dir: {self.base_dir}")
-        logger.debug(f"Stages dir: {self.stages_dir}")
         logger.debug(f"Website dir: {self.website_dir}")
         
-        os.makedirs(self.stages_dir, exist_ok=True)
         os.makedirs(self.website_dir, exist_ok=True)
         
     def get_source_dir(self, source: KnowledgeSource) -> str:
         """Retorna o diretório específico para cada fonte de conhecimento."""
-        if source == KnowledgeSource.WEBSITE:
-            return self.website_dir
-        return self.stages_dir
+        return self.website_dir
 
 class SafeFAISS(FAISS):
     """Extensão segura da classe FAISS para carregamento de embeddings."""
@@ -73,12 +68,10 @@ class SiteKnowledge:
     def __init__(self, config: Optional[KnowledgeBaseConfig] = None):
         self.config = config or KnowledgeBaseConfig()
         self.vectorstores: Dict[KnowledgeSource, Optional[SafeFAISS]] = {
-            KnowledgeSource.WEBSITE: None,
-            KnowledgeSource.STAGES: None
+            KnowledgeSource.WEBSITE: None
         }
         self.last_updates: Dict[KnowledgeSource, Optional[float]] = {
-            KnowledgeSource.WEBSITE: None,
-            KnowledgeSource.STAGES: None
+            KnowledgeSource.WEBSITE: None
         }
         self.embeddings = HuggingFaceEmbeddings(
             model_name="intfloat/multilingual-e5-large",
@@ -147,35 +140,7 @@ class SiteKnowledge:
                 remove_selectors=["nav", "footer", "header"]
             )
             return await loader.aload()
-        elif source == KnowledgeSource.STAGES:
-            documents = []
-            stages_dir = self.config.stages_dir
-            logger.debug(f"Tentando carregar documentos do diretório: {stages_dir}")
-            
-            if not os.path.exists(stages_dir):
-                logger.error(f"Diretório de estágios não encontrado: {stages_dir}")
-                return []
-                
-            for i in range(1, 7):
-                file_path = os.path.join(stages_dir, f"estagio_{i}.txt")
-                logger.debug(f"Verificando arquivo: {file_path}")
-                
-                if os.path.exists(file_path):
-                    try:
-                        loader = TextLoader(file_path, encoding='utf-8')
-                        stage_docs = loader.load()
-                        logger.debug(f"Carregado estágio {i} com sucesso")
-                        
-                        for doc in stage_docs:
-                            doc.metadata['stage'] = i
-                            doc.metadata['source'] = 'stages'
-                        documents.extend(stage_docs)
-                    except Exception as e:
-                        logger.error(f"Erro ao carregar estágio {i}: {str(e)}")
-                else:
-                    logger.debug(f"Arquivo não encontrado: {file_path}")
-                    
-            return documents
+        return []
 
     def _process_documents(self, documents: List[Document], source: KnowledgeSource) -> List[Document]:
         """Processa documentos baseado na fonte."""
@@ -278,11 +243,8 @@ class SiteKnowledge:
         formatted_responses = []
         for doc in docs:
             source = doc.metadata.get('source', 'desconhecida')
-            stage = doc.metadata.get('stage', '')
             
-            if source == 'stages' and stage:
-                header = f"[Estágio {stage}]"
-            elif source == 'website':
+            if source == 'website':
                 header = "[Website]"
             else:
                 header = "[Fonte desconhecida]"
