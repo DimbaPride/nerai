@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
-from agents.agent_setup import agent_executor
+from agents.agent_setup import agent_executor, agent_manager
 from utils.smart_message_processor import send_message_in_chunks
 from utils.conversation_manager import conversation_manager  # Adicionado import
 
@@ -189,14 +189,23 @@ class MessageBuffer:
             # Obter o histórico do conversation_manager
             history = conversation_manager.get_history(number)
             
-            # Usar await com ainvoke
-            result = await agent_executor.ainvoke({
-                "input": message,
-                "history": history,
-                "whatsapp_number": number
-            })
+            # Configurar o número do WhatsApp no AgentManager
+            agent_manager.set_whatsapp_number(number)
             
-            response = result.get("output", "Desculpe, ocorreu um erro. Tente novamente.")
+            # Usar o método run do agent_manager que é mais seguro
+            # pois encapsula as chamadas corretas ao executor
+            response = await agent_manager.run(
+                user_message=message, 
+                history=history
+            )
+            
+            # Garantir que a resposta é uma string válida
+            if not isinstance(response, str) or not response:
+                logger.warning(f"Resposta inválida do agente: {response}")
+                response = "Desculpe, ocorreu um erro. Tente novamente."
+                
+            logger.debug(f"Resposta processada: {response[:100]}...")
+            
             self.add_to_history(number, "assistant", response)
             
             # Usa o sistema de verificação de presença para enviar a resposta
@@ -204,6 +213,8 @@ class MessageBuffer:
             
         except Exception as e:
             logger.error(f"Erro no processamento: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             await send_message_with_presence_check("Desculpe, ocorreu um erro. Tente novamente.", number)
             return False
 

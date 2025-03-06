@@ -169,7 +169,7 @@ class ConfigurationManager:
         return CalendarConfig(
             api_key=os.getenv("CAL_API_KEY", ""),
             base_url=os.getenv("CAL_BASE_URL", "https://api.cal.com/v1"),
-            default_event_type_id=int(os.getenv("CAL_EVENT_TYPE_ID", "1")),
+            default_event_type_id=int(os.getenv("CAL_EVENT_TYPE_ID")),
             time_zone=os.getenv("CAL_TIME_ZONE", "America/Sao_Paulo"),
             buffer_time=int(os.getenv("CAL_BUFFER_TIME", "15")),
             default_duration=int(os.getenv("CAL_DEFAULT_DURATION", "60"))
