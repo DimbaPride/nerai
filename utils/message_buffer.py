@@ -51,7 +51,7 @@ async def is_user_available(number: str) -> bool:
         
         # Se não recebermos atualização de status por mais de 30 segundos,
         # consideramos o usuário como disponível
-        if time.time() - last_update > 30:
+        if time.time() - last_update > 5:
             return True
             
         return current_status not in ["composing", "recording"]
