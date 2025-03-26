@@ -16,8 +16,24 @@ from utils.smart_message_processor import send_message_in_chunks
 from utils.conversation_manager import conversation_manager
 
 
-logging.basicConfig(level=logging.DEBUG)
+# Configuração de logging usando variável de ambiente se disponível
+log_level_str = os.getenv("LOG_LEVEL", "WARNING")
+try:
+    log_level = int(log_level_str)
+except ValueError:
+    log_level = getattr(logging, log_level_str, logging.WARNING)
+
+logging.basicConfig(level=log_level)
+
+# Configurações adicionais para silenciar logs específicos
+logging.getLogger('httpcore').setLevel(logging.ERROR)
+logging.getLogger('httpx').setLevel(logging.ERROR)
+logging.getLogger('hpack').setLevel(logging.ERROR)
+logging.getLogger('groq').setLevel(logging.ERROR)
+logging.getLogger('openai').setLevel(logging.ERROR)
+
 logger = logging.getLogger(__name__)
+logger.info(f"Nível de logging configurado para: {logging.getLevelName(log_level)}")
 
 app = Quart(__name__)
 
@@ -90,6 +106,25 @@ async def webhook():
 
         if event_type == "messages.upsert":
             msg_content = message_data.get("message", {})
+            
+            # Armazenar o ID da mensagem para uso com reações
+            if message_id:
+                try:
+                    # Importar e configurar a ferramenta de reação
+                    from agents.reaction_tools import reaction_tool
+                    
+                    # Log detalhado para depuração do ID de mensagem
+                    logger.info(f"ID da mensagem capturado: '{message_id}' (tipo: {type(message_id).__name__})")
+                    
+                    # Configurar a ferramenta com o ID da mensagem atual e o número
+                    reaction_tool.set_last_message_id(message_id)
+                    reaction_tool.set_whatsapp_number(number)
+                    
+                    logger.debug(f"Ferramenta de reação configurada para ID '{message_id}' e número '{number}'")
+                except ImportError:
+                    logger.debug("Ferramenta de reação não disponível")
+                except Exception as e:
+                    logger.error(f"Erro ao configurar ferramenta de reação: {e}")
 
             # Processa mensagem de áudio
             if "audioMessage" in msg_content:

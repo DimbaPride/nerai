@@ -6,6 +6,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Union, Any
 from zoneinfo import ZoneInfo
 from config import CALENDAR_CONFIG
+import time
+
+# Reduzir logs das requisições HTTP
+logging.getLogger('aiohttp').setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +26,7 @@ class CalendarService:
         self.base_url = CALENDAR_CONFIG.base_url
         self.default_event_type_id = CALENDAR_CONFIG.default_event_type_id
         self.time_zone = CALENDAR_CONFIG.time_zone
-        self.username = "nerai-xt0yj1"  # Username do Cal.com
+        self.username = "agencia-nerai"  # Username do Cal.com
         self._session = None
         
         # Headers padrão para todas as requisições
@@ -30,6 +34,126 @@ class CalendarService:
             "Content-Type": "application/json",
             "Accept": "application/json"
         }
+    
+    @property
+    def current_datetime(self) -> datetime:
+        """
+        Retorna a data e hora atual no fuso horário do Brasil.
+        
+        Returns:
+            datetime: Data e hora atual no fuso horário America/Sao_Paulo
+        """
+        brasil_tz = ZoneInfo("America/Sao_Paulo")
+        return datetime.now(brasil_tz)
+    
+    def format_date_human(self, dt: Optional[datetime] = None, format_str: str = "%d/%m/%Y") -> str:
+        """
+        Formata uma data para exibição ao usuário.
+        Se nenhuma data for fornecida, usa a data atual.
+        
+        Args:
+            dt: Data para formatar (opcional)
+            format_str: String de formato
+            
+        Returns:
+            String formatada com a data
+        """
+        if dt is None:
+            dt = self.current_datetime
+        return dt.strftime(format_str)
+    
+    # === MÉTODOS UTILITÁRIOS DE TIMEZONE ===
+    
+    def convert_to_utc(self, dt: datetime) -> datetime:
+        """
+        Converte um datetime para UTC.
+        
+        Args:
+            dt: Objeto datetime para converter
+            
+        Returns:
+            Objeto datetime em UTC
+        """
+        # Se não tem timezone, assume que é o timezone local (Brasil)
+        if dt.tzinfo is None:
+            brasil_tz = ZoneInfo("America/Sao_Paulo")
+            dt = dt.replace(tzinfo=brasil_tz)
+            
+        # Converte para UTC
+        return dt.astimezone(timezone.utc)
+    
+    def convert_to_local(self, dt: datetime) -> datetime:
+        """
+        Converte um datetime para o fuso horário local (Brasil).
+        
+        Args:
+            dt: Objeto datetime para converter
+            
+        Returns:
+            Objeto datetime no fuso horário do Brasil
+        """
+        # Se não tem timezone, assume que é UTC
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+            
+        # Converte para o fuso horário local
+        brasil_tz = ZoneInfo("America/Sao_Paulo")
+        return dt.astimezone(brasil_tz)
+    
+    def parse_iso_datetime(self, iso_string: str) -> datetime:
+        """
+        Converte uma string ISO para um objeto datetime com timezone.
+        
+        Args:
+            iso_string: String no formato ISO (YYYY-MM-DDTHH:MM:SS.sss)
+            
+        Returns:
+            Objeto datetime com timezone
+        """
+        # Tentar converter para datetime
+        dt = datetime.fromisoformat(iso_string)
+        
+        # Se não tem timezone, assume que é o timezone local (Brasil)
+        if dt.tzinfo is None:
+            brasil_tz = ZoneInfo("America/Sao_Paulo")
+            dt = dt.replace(tzinfo=brasil_tz)
+            
+        return dt
+    
+    def format_datetime_to_iso(self, dt: datetime) -> str:
+        """
+        Formata um datetime para string ISO.
+        
+        Args:
+            dt: Objeto datetime para formatar
+            
+        Returns:
+            String no formato ISO (YYYY-MM-DDTHH:MM:SS.000Z)
+        """
+        # Garantir que tem timezone
+        if dt.tzinfo is None:
+            brasil_tz = ZoneInfo("America/Sao_Paulo")
+            dt = dt.replace(tzinfo=brasil_tz)
+            
+        # Formatar no padrão ISO com Z para UTC
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    
+    def format_datetime_human(self, dt: datetime, format_str: str = "%d/%m/%Y às %H:%M") -> str:
+        """
+        Formata um datetime para exibição ao usuário no fuso horário local.
+        
+        Args:
+            dt: Objeto datetime para formatar
+            format_str: String de formato
+            
+        Returns:
+            String formatada para exibição
+        """
+        # Converter para fuso horário local
+        local_dt = self.convert_to_local(dt)
+        
+        # Formatar de acordo com o formato especificado
+        return local_dt.strftime(format_str)
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Retorna uma sessão HTTP existente ou cria uma nova."""
@@ -124,15 +248,13 @@ class CalendarService:
         # Calcular data final com base na quantidade de dias
         end_date = start_date + timedelta(days=days_ahead)
         
-        # Garantir que as datas têm timezone
-        if start_date.tzinfo is None:
-            start_date = start_date.replace(tzinfo=timezone.utc)
-        if end_date.tzinfo is None:
-            end_date = end_date.replace(tzinfo=timezone.utc)
+        # Garantir que as datas têm timezone correto (UTC)
+        start_date = self.convert_to_utc(start_date)
+        end_date = self.convert_to_utc(end_date)
         
         # Formatar datas como strings ISO 8601 para a API
-        start_time_str = start_date.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-        end_time_str = end_date.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        start_time_str = self.format_datetime_to_iso(start_date)
+        end_time_str = self.format_datetime_to_iso(end_date)
         
         # Parâmetros para busca de slots
         params = {
@@ -173,20 +295,17 @@ class CalendarService:
         """
         event_type_id = event_type_id or self.default_event_type_id
         
-        # Garantir que a data esteja em UTC
-        if start_time.tzinfo is None:
-            start_time = start_time.replace(tzinfo=timezone.utc)
-        else:
-            start_time = start_time.astimezone(timezone.utc)
+        # Converter para UTC
+        start_time_utc = self.convert_to_utc(start_time)
             
         # Calcular horário final (1 hora após início)
-        end_time = start_time + timedelta(minutes=60)
+        end_time_utc = start_time_utc + timedelta(minutes=60)
         
         # Preparar payload conforme documentação da API
         payload = {
             "eventTypeId": int(event_type_id),
-            "start": start_time.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
-            "end": end_time.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "start": self.format_datetime_to_iso(start_time_utc),
+            "end": self.format_datetime_to_iso(end_time_utc),
             "responses": {
                 "name": name,
                 "email": email,
@@ -197,7 +316,10 @@ class CalendarService:
             },
             "timeZone": CALENDAR_CONFIG.time_zone,
             "language": "pt",
-            "metadata": {}
+            "metadata": {},
+            "user": self.username,
+            "users": [self.username],
+            "usernameList": [self.username]
         }
         
         # Adicionar campos opcionais
@@ -215,8 +337,24 @@ class CalendarService:
             logger.info(f"Agendamento criado com sucesso: {booking.get('id')}")
             return booking
         except Exception as e:
-            logger.error(f"Erro ao criar agendamento: {e}")
-            raise CalendarServiceError(f"Falha ao criar agendamento: {e}")
+            error_msg = str(e)
+            logger.error(f"Erro ao criar agendamento: {error_msg}")
+            
+            if "no_available_users_found_error" in error_msg:
+                # Este é um problema de configuração do Cal.com - o tipo de evento 
+                # não tem usuários/hosts associados ou eles não têm disponibilidade configurada
+                logger.error("ERRO DE CONFIGURAÇÃO: O tipo de evento não tem usuários (hosts) associados "
+                             "ou os usuários não têm disponibilidade configurada para este horário.")
+                logger.error(f"Evento ID: {event_type_id}, Usuário: {self.username}, Horário: {start_time}")
+                
+                # Sugestões para resolver:
+                logger.error("SOLUÇÃO: Acesse o painel do Cal.com e verifique:")
+                logger.error("1. Se o tipo de evento existe e tem o ID correto")
+                logger.error("2. Se o usuário 'agencia-nerai' está associado a este tipo de evento")
+                logger.error("3. Se o usuário tem disponibilidade configurada para este horário")
+            
+            # Repassar o erro original para tratamento adequado
+            raise CalendarServiceError(f"Falha ao criar agendamento: {error_msg}")
     
     # === GERENCIAMENTO DE PARTICIPANTES ===
     
@@ -309,7 +447,7 @@ class CalendarService:
             elif email:
                 # Buscar todos os agendamentos pendentes/confirmados
                 all_bookings = await self._request("GET", "bookings", 
-                                                  params={"status": "ACCEPTED,PENDING"})
+                                                  params={"status": "upcoming"})
                 
                 # Filtrar aqueles que correspondem ao email
                 if "bookings" in all_bookings:
@@ -401,28 +539,36 @@ class CalendarService:
             # Buscar informações do agendamento atual para manter consistência
             booking = await self.get_booking(booking_id)
             
-            # Garantir que new_start_time tem timezone
+            # Garantir que o horário está no fuso horário local
             if new_start_time.tzinfo is None:
-                new_start_time = new_start_time.replace(tzinfo=timezone.utc)
+                brasil_tz = ZoneInfo("America/Sao_Paulo")
+                new_start_time = new_start_time.replace(tzinfo=brasil_tz)
+            
+            # Log do horário local
+            logger.info(f"Horário local para reagendamento: {new_start_time}")
             
             # Converter para UTC
-            new_start_time_utc = new_start_time.astimezone(timezone.utc)
+            new_start_time_utc = self.convert_to_utc(new_start_time)
+            logger.info(f"Horário UTC para reagendamento: {new_start_time_utc}")
             
             # Determinar a duração do agendamento original
             duration_minutes = 60  # Valor padrão
             if booking and "startTime" in booking and "endTime" in booking:
-                start = datetime.fromisoformat(booking["startTime"].replace('Z', '+00:00'))
-                end = datetime.fromisoformat(booking["endTime"].replace('Z', '+00:00'))
+                start = self.parse_iso_datetime(booking["startTime"])
+                end = self.parse_iso_datetime(booking["endTime"])
                 duration_minutes = int((end - start).total_seconds() / 60)
             
-            # Calcular novo horário final
+            # Calcular novo horário final em UTC
             new_end_time_utc = new_start_time_utc + timedelta(minutes=duration_minutes)
             
             # Preparar payload para reagendamento
             payload = {
-                "start": new_start_time_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
-                "end": new_end_time_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                "startTime": self.format_datetime_to_iso(new_start_time_utc),
+                "endTime": self.format_datetime_to_iso(new_end_time_utc)
             }
+            
+            # Log do payload
+            logger.info(f"Payload de reagendamento: {payload}")
             
             # Enviar requisição de reagendamento
             result = await self._request(
@@ -431,7 +577,8 @@ class CalendarService:
                 json_data=payload
             )
             
-            logger.info(f"Agendamento {booking_id} reagendado para {new_start_time_utc}")
+            # Log do horário local para verificação
+            logger.info(f"Agendamento {booking_id} reagendado para {new_start_time}")
             return result
             
         except Exception as e:
@@ -478,8 +625,8 @@ class CalendarService:
                 # Converter horário para local
                 slot_time = slot.get("time", "")
                 if slot_time:
-                    slot_time_obj = datetime.fromisoformat(slot_time.replace('Z', '+00:00'))
-                    local_time = slot_time_obj.astimezone(tz)
+                    slot_time_obj = self.parse_iso_datetime(slot_time)
+                    local_time = self.convert_to_local(slot_time_obj)
                     
                     message_parts.append(f"⏰ {local_time.strftime('%H:%M')}")
         

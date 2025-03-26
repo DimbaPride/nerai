@@ -5,10 +5,8 @@ import logging
 import os
 from typing import List, Optional
 from dataclasses import dataclass
-from langchain.prompts import PromptTemplate
 
 from services.whatsapp_client import WhatsAppClient, create_whatsapp_client
-from services.llm import llm_groq
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +17,10 @@ class MessageProcessorConfig:
     max_delay: int = 3000  # ms
     chars_per_second: float = 60.0
     variation_percent: float = 0.1
-    max_chunk_size: int = 1000
-    question_pause: float = 1  # segundos
+    max_chunk_size: int = 1000  # Tamanho máximo por mensagem
+    question_pause: float = 1.0  # segundos
     exclamation_pause: float = 0.8  # segundos
-    default_pause: float = 0.5 # segundos
+    default_pause: float = 0.5  # segundos
 
 class SmartMessageProcessor:
     """Processador inteligente de mensagens."""
@@ -41,19 +39,6 @@ class SmartMessageProcessor:
         """
         self.client = whatsapp_client
         self.config = config or MessageProcessorConfig()
-        self.format_prompt = PromptTemplate.from_template("""
-        Formate o texto a seguir em partes naturais para envio via WhatsApp.
-        Regras:
-        - Divida em partes que façam sentido semanticamente
-        - Mantenha o contexto em cada parte
-        - Retorne apenas as partes separadas por |||
-        - Não adicione numeração ou marcadores
-        - Use um único asterisco para negrito (Ex: palavra)
-        - Não use emojis
-        - Quebre mensagens longas em partes menores
-        
-        Texto: {text}
-        """)
 
     def calculate_typing_delay(self, text_length: int) -> int:
         """
@@ -92,45 +77,26 @@ class SmartMessageProcessor:
             return self.config.exclamation_pause
         return self.config.default_pause
 
-    async def _format_message(self, text: str) -> List[str]:
-        """
-        Formata mensagem em chunks usando IA.
-        """
-        try:
-            # Formata o prompt corretamente
-            formatted_prompt = self.format_prompt.format(text=text)
-            
-            # Faz a chamada ao LLM
-            response = await llm_groq.ainvoke(formatted_prompt)
-            
-            # Extrai o conteúdo
-            formatted_text = response.content if hasattr(response, 'content') else str(response)
-            
-            # Divide e limpa os chunks
-            chunks = [
-                chunk.strip()
-                for chunk in formatted_text.split("|||")
-                if chunk and chunk.strip()
-            ]
-            
-            if not chunks:
-                logger.warning("Nenhum chunk válido gerado, usando texto original")
-                return [text]
-                
-            return chunks
-            
-        except Exception as e:
-            logger.error(f"Erro na formatação: {e}", exc_info=True)
-        return [text]
-
     async def send_message(self, text: str, number: str) -> bool:
         """
-        Processa e envia mensagem de forma natural.
+        Envia mensagem, dividida por quebras de linha duplas.
+        
+        Args:
+            text: Texto a ser enviado
+            number: Número do destinatário
+            
+        Returns:
+            bool: Sucesso do envio
         """
         try:
-            # Formata mensagem em chunks
-            chunks = await self._format_message(text)
-            logger.debug(f"Chunks gerados: {chunks}")
+            # Dividir por parágrafos ou quebras de linha duplas - é a forma mais natural
+            chunks = [chunk.strip() for chunk in text.split("\n\n") if chunk.strip()]
+            
+            # Se não houver quebras naturais, deixar como uma única mensagem
+            if not chunks:
+                chunks = [text]
+            
+            logger.debug(f"Mensagem dividida em {len(chunks)} partes")
             
             # Envia cada chunk
             for i, chunk in enumerate(chunks):
@@ -149,7 +115,6 @@ class SmartMessageProcessor:
                     if not success:
                         logger.error(f"Falha ao enviar chunk {i+1}")
                         return False
-            
                         
                 except Exception as e:
                     logger.error(f"Erro ao enviar chunk {i+1}: {e}")
@@ -167,6 +132,57 @@ class SmartMessageProcessor:
             logger.error(f"Erro no envio: {e}", exc_info=True)
             return False
 
+    async def send_sticker(self, sticker_url: str, number: str) -> bool:
+        """
+        Envia uma figurinha para o usuário.
+        
+        Args:
+            sticker_url: URL da figurinha (formato WebP)
+            number: Número do destinatário
+            
+        Returns:
+            bool: Sucesso do envio
+        """
+        try:
+            # Calcula delay para simular naturalmente o envio
+            delay = self.calculate_typing_delay(50)  # Usamos valor fixo só para simular alguma demora
+            logger.debug(f"Enviando figurinha para {number}")
+            
+            # Enviar a figurinha usando o cliente WhatsApp
+            return await self.client.send_sticker(
+                sticker_url=sticker_url,
+                number=number,
+                delay=delay
+            )
+        except Exception as e:
+            logger.error(f"Erro ao enviar figurinha: {e}")
+            return False
+
+    async def send_reaction(self, message_id: str, emoji: str, number: str) -> bool:
+        """
+        Envia uma reação a uma mensagem.
+        
+        Args:
+            message_id: ID da mensagem a reagir
+            emoji: Emoji de reação (👍, ❤️, 😂, etc.)
+            number: Número do destinatário
+            
+        Returns:
+            bool: Sucesso do envio
+        """
+        try:
+            logger.debug(f"Enviando reação '{emoji}' para mensagem {message_id}")
+            
+            # Enviar a reação usando o cliente WhatsApp
+            return await self.client.send_reaction(
+                message_id=message_id,
+                emoji=emoji,
+                number=number
+            )
+        except Exception as e:
+            logger.error(f"Erro ao enviar reação: {e}")
+            return False
+
 # Cria instância do processador
 whatsapp_client = create_whatsapp_client(
     api_key=os.getenv("EVOLUTION_API_KEY"),
@@ -176,7 +192,15 @@ whatsapp_client = create_whatsapp_client(
 
 message_processor = SmartMessageProcessor(whatsapp_client)
 
-# Função de interface para manter compatibilidade
+# Funções de interface para manter compatibilidade
 async def send_message_in_chunks(text: str, number: str) -> bool:
     """Função de interface para envio de mensagens."""
     return await message_processor.send_message(text, number)
+
+async def send_sticker_to_user(sticker_url: str, number: str) -> bool:
+    """Função de interface para envio de figurinhas."""
+    return await message_processor.send_sticker(sticker_url, number)
+
+async def send_reaction_to_message(message_id: str, emoji: str, number: str) -> bool:
+    """Função de interface para envio de reações."""
+    return await message_processor.send_reaction(message_id, emoji, number)

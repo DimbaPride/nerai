@@ -51,7 +51,7 @@ class CalendarConfig:
     """Configurações do Cal.com"""
     api_key: str
     base_url: str = "https://api.cal.com/v1"
-    default_event_type_id: int = 1  # ID padrão para tipos de eventos
+    default_event_type_id: int = 1857112  # ID do tipo de evento do Cal.com
     time_zone: str = "America/Sao_Paulo"
     buffer_time: int = 15  # Buffer em minutos entre reuniões
     default_duration: int = 60  # Duração padrão da reunião em minutos

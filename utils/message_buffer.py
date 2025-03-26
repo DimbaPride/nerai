@@ -8,6 +8,8 @@ from agents.agent_setup import agent_executor, agent_manager
 from utils.smart_message_processor import send_message_in_chunks
 from utils.conversation_manager import conversation_manager  # Adicionado import
 
+# Configuração para reduzir ruído nos logs
+logging.getLogger('asyncio').setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
 
@@ -191,18 +193,25 @@ class MessageBuffer:
             
             # Configurar o número do WhatsApp no AgentManager
             agent_manager.set_whatsapp_number(number)
+            logger.info(f"Número WhatsApp configurado no AgentManager: {number}")
             
             # Usar o método run do agent_manager que é mais seguro
             # pois encapsula as chamadas corretas ao executor
+            logger.info(f"Chamando o agente para processar mensagem para número: {number}")
             response = await agent_manager.run(
-                user_message=message, 
-                history=history
+                message=message,
+                phone_number=number,
+                metadata={"history": history} if history else None
             )
             
             # Garantir que a resposta é uma string válida
-            if not isinstance(response, str) or not response:
+            if not isinstance(response, str):
                 logger.warning(f"Resposta inválida do agente: {response}")
                 response = "Desculpe, ocorreu um erro. Tente novamente."
+            elif response.strip() == "":
+                # Simplesmente registrar sem enviar mensagem para espaços em branco
+                logger.debug("Resposta vazia ou somente espaços, não enviando mensagem")
+                return True
                 
             logger.debug(f"Resposta processada: {response[:100]}...")
             
@@ -294,3 +303,25 @@ async def handle_message_with_buffer(message: str, number: str) -> None:
 
 async def process_message(message: str, number: str) -> bool:
     return await message_buffer._process_message(message, number)
+
+def process_agent_response(response: str) -> bool:
+    """
+    Processa a resposta do agente.
+    
+    Args:
+        response: Resposta do agente
+        
+    Returns:
+        bool: True se a resposta for válida, False caso contrário
+    """
+    # Tratar string vazia ou espaço em branco como respostas válidas
+    # quando vieram de ferramentas direcionadas
+    if response is None:
+        return False
+        
+    # Espaços em branco ou strings vazias são válidos para respostas de ferramentas
+    # que não precisam dar feedback ao usuário (como stickers e reações)
+    if response.strip() == "":
+        return True
+        
+    return len(response) > 0
